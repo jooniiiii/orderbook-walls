@@ -1,0 +1,661 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>호가 매물대 차트</title>
+<style>
+/* 레이아웃: 상단 설정 바 / 왼쪽 캔들+매물대 차트 / 오른쪽 호가 요약 패널 */
+:root{
+  --bg:#0b0d13; --panel:#10131b; --raised:#171b26; --line:#222838;
+  --text:#d9dde7; --muted:#7d8598;
+  --up:#2ebd85; --down:#f6465d;
+  --wall:#8f63f4; --wall-xl:#f3d32b;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--text);font:13px/1.45 -apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Malgun Gothic","Segoe UI",Roboto,sans-serif;display:flex;flex-direction:column;font-variant-numeric:tabular-nums}
+header{display:flex;flex-wrap:wrap;align-items:center;gap:10px 16px;padding:10px 16px;border-bottom:1px solid var(--line);background:var(--panel)}
+.ticker{display:flex;align-items:baseline;gap:10px;margin-right:6px}
+.ticker b{font-size:20px;letter-spacing:.2px}
+.ticker small{color:var(--muted)}
+.field{display:flex;flex-direction:column;gap:2px}
+.field label{font-size:10.5px;color:var(--muted)}
+select,input[type=text]{background:var(--raised);color:var(--text);border:1px solid var(--line);border-radius:5px;padding:5px 7px;font:inherit;height:30px}
+input[type=text]{width:104px;text-transform:uppercase}
+select:focus-visible,input:focus-visible,button:focus-visible{outline:2px solid var(--wall);outline-offset:1px}
+.seg{display:flex;border:1px solid var(--line);border-radius:5px;overflow:hidden;height:30px}
+.seg button{background:var(--raised);color:var(--muted);border:0;border-right:1px solid var(--line);padding:0 9px;font:inherit;cursor:pointer}
+.seg button:last-child{border-right:0}
+.seg button[aria-pressed=true]{background:var(--wall);color:#fff}
+.check{display:flex;align-items:center;gap:5px;color:var(--muted);cursor:pointer;height:30px;align-self:flex-end}
+.check input{accent-color:var(--wall)}
+.status{margin-left:auto;display:flex;align-items:center;gap:6px;color:var(--muted);font-size:12px;align-self:center}
+.dot{width:8px;height:8px;border-radius:50%;background:#e0a12b}
+.dot.ok{background:var(--up)} .dot.bad{background:var(--down)}
+main{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) 320px}
+#chartWrap{position:relative;min-height:0;min-width:0}
+canvas{position:absolute;inset:0;width:100%;height:100%;display:block;touch-action:none;cursor:crosshair}
+#tip{position:absolute;pointer-events:none;background:#1b2030f2;border:1px solid var(--line);border-radius:6px;padding:8px 10px;font-size:12px;min-width:170px;display:none;z-index:3}
+#tip h4{margin:0 0 4px;font-size:12px}
+#tip div{display:flex;justify-content:space-between;gap:14px}
+#tip span{color:var(--muted)}
+#msg{position:absolute;left:16px;top:12px;right:90px;color:var(--muted);font-size:12px;pointer-events:none}
+#msg.err{color:var(--down)}
+.legend{position:absolute;left:16px;bottom:30px;display:flex;gap:12px;font-size:11px;color:var(--muted);pointer-events:none}
+.legend i{display:inline-block;width:18px;height:6px;border-radius:1px;margin-right:5px;vertical-align:middle}
+aside{border-left:1px solid var(--line);background:var(--panel);overflow-y:auto;padding:14px 14px 18px;display:flex;flex-direction:column;gap:16px}
+aside h3{margin:0 0 8px;font-size:12px;color:var(--muted);font-weight:600}
+.bal{display:flex;height:8px;border-radius:2px;overflow:hidden;background:var(--raised)}
+.bal i{display:block;height:100%}
+.balrow{display:flex;justify-content:space-between;margin-top:5px;font-size:12px}
+.balrow .b{color:var(--up)} .balrow .a{color:var(--down)}
+.kv{display:flex;justify-content:space-between;font-size:12px;padding:2px 0}
+.kv span{color:var(--muted)}
+table{width:100%;border-collapse:collapse;font-size:12px}
+th{font-weight:500;color:var(--muted);text-align:right;padding:3px 4px;font-size:11px;border-bottom:1px solid var(--line)}
+th:first-child,td:first-child{text-align:left}
+td{text-align:right;padding:4px 4px;position:relative;white-space:nowrap}
+tr.ask td:first-child{color:var(--down)} tr.bid td:first-child{color:var(--up)}
+tr.xl td:nth-child(2){color:var(--wall-xl);font-weight:600}
+td .bar{position:absolute;right:0;top:2px;bottom:2px;border-radius:1px;opacity:.16;z-index:0}
+td>*:not(.bar){position:relative}
+tr.mid td{text-align:center;padding:7px 4px;border-top:1px solid var(--line);border-bottom:1px solid var(--line);font-weight:600;font-size:13px}
+.empty{color:var(--muted);padding:8px 4px;text-align:center}
+.note{color:var(--muted);font-size:11.5px;line-height:1.55;margin:0}
+@media (max-width:820px){
+  main{grid-template-columns:1fr;grid-template-rows:minmax(340px,58%) auto;overflow-y:auto}
+  aside{border-left:0;border-top:1px solid var(--line);overflow:visible}
+  .status{margin-left:0}
+}
+</style>
+</head>
+<body>
+<header>
+  <div class="ticker"><b id="px">–</b><small id="pxSub">Binance Spot</small></div>
+  <div class="field"><label for="sym">심볼</label>
+    <input type="text" id="sym" list="symList" value="BTCUSDT" spellcheck="false" autocomplete="off">
+    <datalist id="symList"><option value="BTCUSDT"><option value="ETHUSDT"><option value="SOLUSDT"><option value="XRPUSDT"><option value="BNBUSDT"><option value="DOGEUSDT"></datalist>
+  </div>
+  <div class="field"><label>봉 주기</label>
+    <div class="seg" id="ivSeg">
+      <button data-iv="1m">1분</button><button data-iv="5m">5분</button><button data-iv="15m">15분</button><button data-iv="1h">1시간</button><button data-iv="4h">4시간</button>
+    </div>
+  </div>
+  <div class="field"><label for="bucket">가격 묶음 단위</label><select id="bucket"><option value="0">자동</option></select></div>
+  <div class="field"><label for="minSize">최소 주문 규모</label>
+    <select id="minSize">
+      <option value="auto">자동</option><option value="200000">$200K 이상</option><option value="500000">$500K 이상</option>
+      <option value="1000000">$1M 이상</option><option value="2000000">$2M 이상</option><option value="5000000">$5M 이상</option><option value="10000000">$10M 이상</option>
+    </select></div>
+  <div class="field"><label for="minDur">최소 유지 시간</label>
+    <select id="minDur"><option value="0">제한 없음</option><option value="10000">10초</option><option value="30000">30초</option><option value="60000">1분</option><option value="300000">5분</option></select></div>
+  <div class="field"><label for="range">탐지 범위</label>
+    <select id="range"><option value="0.01">±1%</option><option value="0.02">±2%</option><option value="0.03">±3%</option><option value="0.05">±5%</option></select></div>
+  <label class="check"><input type="checkbox" id="showProf" checked>잔량 프로필</label>
+  <label class="check"><input type="checkbox" id="showMa" checked>MA20</label>
+  <div class="status"><i class="dot" id="dot"></i><span id="statusTxt">연결 중</span></div>
+</header>
+<main>
+  <div id="chartWrap">
+    <canvas id="cv"></canvas>
+    <div id="msg">바이낸스에서 데이터를 불러오는 중입니다.</div>
+    <div class="legend"><span><i style="background:var(--wall)"></i>대형 주문</span><span><i style="background:var(--wall-xl)"></i>초대형 주문 (기준의 2.5배 이상)</span></div>
+    <div id="tip"></div>
+  </div>
+  <aside>
+    <section>
+      <h3>현재가 ±1% 잔량</h3>
+      <div class="bal"><i id="balB" style="background:var(--up);width:50%"></i><i id="balA" style="background:var(--down);width:50%"></i></div>
+      <div class="balrow"><span class="b" id="balBt">매수 –</span><span class="a" id="balAt">매도 –</span></div>
+    </section>
+    <section>
+      <div class="kv"><span>스프레드</span><b id="spread">–</b></div>
+      <div class="kv"><span>매물대 탐지 기준</span><b id="thr">–</b></div>
+      <div class="kv"><span>추적 중인 호가 수</span><b id="lvls">–</b></div>
+      <div class="kv"><span>꺼져 있던 동안의 기록</span><b id="srv">–</b></div>
+    </section>
+    <section>
+      <h3>가장 가까운 매물대</h3>
+      <div class="kv"><span>위쪽 매도벽</span><b id="nearA">–</b></div>
+      <div class="kv"><span>아래쪽 매수벽</span><b id="nearB">–</b></div>
+    </section>
+    <section>
+      <h3>현재 살아 있는 매물대</h3>
+      <table>
+        <thead><tr><th>가격</th><th>규모</th><th>거리</th><th>유지</th></tr></thead>
+        <tbody id="wallRows"><tr><td colspan="4" class="empty">호가창 동기화 중</td></tr></tbody>
+      </table>
+    </section>
+    <section>
+      <h3>최근 사라진 매물대</h3>
+      <table>
+        <thead><tr><th>가격</th><th>최대 규모</th><th>결과</th><th>시점</th></tr></thead>
+        <tbody id="goneRows"><tr><td colspan="4" class="empty">아직 없음</td></tr></tbody>
+      </table>
+    </section>
+    <p class="note">열자마자 현재 호가창의 매물대가 모두 표시됩니다. 유지 시간은 이 페이지가 열려 있는 동안만 잴 수 있어서, 열기 전부터 있던 주문은 왼쪽 끝이 흐려지는 막대와 "이상"으로 표시합니다.<br>꺼져 있던 동안은 서버 수집기가 5분마다 호가창을 찍어 둡니다(BTCUSDT, ETHUSDT). 그 외 코인은 이 브라우저에 저장된 기록만 이어지고, 꺼져 있던 구간은 옅은 색으로 표시됩니다.<br>"취소 추정"은 가격이 닿기 전에 사라진 주문입니다. 자주 취소되는 가격대는 허수일 가능성이 있습니다.<br>차트 조작: 드래그로 이동, 휠로 확대, 가격 축 드래그로 세로 확대, 더블클릭으로 초기화.</p>
+  </aside>
+</main>
+<script>
+"use strict";
+const REST=['https://data-api.binance.vision','https://api.binance.com'];
+const HISTORY_BASE='https://raw.githubusercontent.com/jooniiiii/orderbook-walls/data/'; // 5분 간격 서버 기록
+const WSS=['wss://stream.binance.com:9443','wss://data-stream.binance.vision'];
+const IVMS={'1m':6e4,'5m':3e5,'15m':9e5,'1h':36e5,'4h':144e5};
+const AXW=74, AXH=22, RGAP=78;
+const $=id=>document.getElementById(id);
+const css=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const C={up:css('--up'),down:css('--down'),wall:css('--wall'),xl:css('--wall-xl'),line:css('--line'),text:css('--text'),muted:css('--muted'),bg:css('--bg')};
+
+const S={symbol:'BTCUSDT',iv:'1m',candles:[],bids:new Map(),asks:new Map(),synced:false,lastU:0,buf:[],
+  walls:[],active:new Map(),thr:0,thrAuto:0,bucket:0,bucketOff:0,prof:null,bb:0,ba:0,
+  minSize:'auto',minDur:10000,range:0.03,showProf:true,showMa:true};
+const V={bw:7,pan:0,autoY:true,lo:0,hi:1,mx:-1,my:-1,hits:[]};
+let gen=0, restIdx=0, wsIdx=0, wsDepth=null, wsKline=null, dirty=true, wallId=0, lastSnap=0, wsFails=0, lastDepthMsg=0, lastSample=0;
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+
+/* ---------- 설정 저장 ---------- */
+try{
+  const o=JSON.parse(localStorage.getItem('obwalls')||'{}');
+  for(const k of ['symbol','iv','minSize','minDur','range','showProf','showMa','bucketOff']) if(k in o) S[k]=o[k];
+  if(!IVMS[S.iv]) S.iv='1m';
+}catch(e){}
+function save(){try{localStorage.setItem('obwalls',JSON.stringify({symbol:S.symbol,iv:S.iv,minSize:S.minSize,minDur:S.minDur,range:S.range,showProf:S.showProf,showMa:S.showMa,bucketOff:S.bucketOff}))}catch(e){}}
+
+/* ---------- 표시 형식 ---------- */
+function dec(p){return p>=1000?2:p>=10?3:p>=1?4:p>=0.01?5:8}
+function fP(p){const d=dec(p);return p.toLocaleString('en-US',{minimumFractionDigits:d,maximumFractionDigits:d})}
+function fUsd(n){return n>=1e9?'$'+(n/1e9).toFixed(2)+'B':n>=1e6?'$'+(n/1e6).toFixed(2)+'M':n>=1e3?'$'+(n/1e3).toFixed(0)+'K':'$'+n.toFixed(0)}
+function fQty(q){return q>=1e6?(q/1e6).toFixed(2)+'M':q>=1e3?(q/1e3).toFixed(1)+'K':q>=10?q.toFixed(1):q.toFixed(3)}
+function fDur(ms){const s=Math.floor(ms/1000);if(s<60)return s+'초';const m=Math.floor(s/60);if(m<60)return m+'분 '+(s%60)+'초';return Math.floor(m/60)+'시간 '+(m%60)+'분'}
+function stepAt(k){return [1,2,5][((k%3)+3)%3]*Math.pow(10,Math.floor(k/3))}
+function baseK(price){const target=price*0.0002;let best=0,bd=Infinity;for(let k=-30;k<=30;k++){const d=Math.abs(Math.log(stepAt(k)/target));if(d<bd){bd=d;best=k}}return best}
+function coin(){return S.symbol.replace(/(USDT|FDUSD|USDC|BUSD|BTC|ETH|BNB|TRY|EUR)$/,'')||S.symbol}
+
+function setStatus(kind,txt){$('dot').className='dot'+(kind==='ok'?' ok':kind==='bad'?' bad':'');$('statusTxt').textContent=txt}
+function setMsg(t,err){const m=$('msg');m.textContent=t||'';m.className=err?'err':''}
+
+/* ---------- 바이낸스 REST ---------- */
+async function restGet(path){
+  let lastErr;
+  for(let i=0;i<REST.length;i++){
+    const idx=(restIdx+i)%REST.length;
+    try{
+      const r=await fetch(REST[idx]+path);
+      if(r.status===400){const j=await r.json().catch(()=>({}));const e=new Error(j.msg||'잘못된 요청');e.bad=true;throw e}
+      if(!r.ok) throw new Error('HTTP '+r.status);
+      restIdx=idx; return await r.json();
+    }catch(e){lastErr=e; if(e.bad) throw e}
+  }
+  throw lastErr;
+}
+
+/* ---------- 시작 / 심볼 전환 ---------- */
+function start(){
+  gen++; const g=gen;
+  if(wsDepth){wsDepth.onclose=null;wsDepth.close()} if(wsKline){wsKline.onclose=null;wsKline.close()}
+  S.candles=[];S.bids=new Map();S.asks=new Map();S.synced=false;S.buf=[];S.walls=[];S.active.clear();S.thrAuto=0;S.prof=null;S.bucket=0;S.sampled=false;S.resume=null;S.poll=false;wsFails=0;S.remote=null;S.remoteDone=false;
+  V.pan=0;V.autoY=true;
+  setStatus('wait','연결 중'); setMsg('바이낸스에서 데이터를 불러오는 중입니다.');
+  $('wallRows').innerHTML='<tr><td colspan="4" class="empty">호가창 동기화 중</td></tr>';
+  loadKlines(g).then(ok=>{ if(ok&&g===gen){fetchRemote(g);openKline(g);openDepth(g)} });
+}
+async function loadKlines(g){
+  try{
+    const j=await restGet('/api/v3/klines?symbol='+S.symbol+'&interval='+S.iv+'&limit=1000');
+    if(g!==gen) return false;
+    S.candles=j.map(k=>({t:k[0],o:+k[1],h:+k[2],l:+k[3],c:+k[4]}));
+    if(!S.bucket) setBucket();
+    setMsg(''); dirty=true; return true;
+  }catch(e){
+    if(g!==gen) return false;
+    setStatus('bad','오류');
+    setMsg(e.bad?'"'+S.symbol+'" 심볼을 바이낸스 스팟에서 찾을 수 없습니다. BTCUSDT처럼 입력해 주세요.':'바이낸스에 연결할 수 없습니다. 네트워크 상태를 확인한 뒤 새로 고쳐 주세요.',true);
+    return false;
+  }
+}
+function setBucket(){
+  const p=S.candles[S.candles.length-1].c, k0=baseK(p), sel=$('bucket');
+  sel.innerHTML='';
+  for(const off of [-1,0,1,2,3]){const o=document.createElement('option');o.value=off;o.textContent=stepAt(k0+off).toLocaleString('en-US',{maximumFractionDigits:8})+(off===0?' (자동)':'');sel.appendChild(o)}
+  if(![-1,0,1,2,3].includes(+S.bucketOff)) S.bucketOff=0;
+  sel.value=S.bucketOff; S.bucket=stepAt(k0+ +S.bucketOff);
+}
+
+/* ---------- 꺼져 있던 동안의 기록 (GitHub 수집기가 5분마다 저장) ---------- */
+async function fetchRemote(g){
+  S.remote=null; S.remoteDone=false;
+  const sym=S.symbol, off=+S.bucketOff;
+  try{
+    const ctl=new AbortController(), to=setTimeout(()=>ctl.abort(),5000);
+    const r=await fetch(HISTORY_BASE+sym+'.json?t='+Math.floor(Date.now()/60000),{signal:ctl.signal,cache:'no-store'});
+    clearTimeout(to);
+    if(r.ok){
+      const j=await r.json();
+      if(g===gen&&sym===S.symbol&&off===+S.bucketOff&&j&&j.bucket&&Array.isArray(j.walls)){
+        if(off===0&&Math.abs(j.bucket/S.bucket-1)>1e-9){ S.bucket=j.bucket; const o=$('bucket').selectedOptions[0]; if(o)o.textContent=j.bucket.toLocaleString('en-US',{maximumFractionDigits:8})+' (자동)' }
+        if(Math.abs(j.bucket/S.bucket-1)<1e-9) S.remote=j;
+      }
+    }
+  }catch(e){}
+  if(g===gen&&sym===S.symbol) S.remoteDone=true;
+}
+
+/* ---------- 웹소켓: 캔들 ---------- */
+function mergeCandle(n){
+  const c=S.candles,last=c[c.length-1];
+  if(last&&last.t===n.t) c[c.length-1]=n; else if(!last||n.t>last.t){c.push(n); if(c.length>1500)c.shift()}
+  dirty=true;
+}
+function openKline(g){
+  if(S.poll) return;
+  const iv=S.iv; let ws;
+  try{ws=new WebSocket(WSS[wsIdx]+'/ws/'+S.symbol.toLowerCase()+'@kline_'+iv)}catch(e){return}
+  wsKline=ws;
+  ws.onmessage=e=>{
+    if(g!==gen||iv!==S.iv) return;
+    const k=JSON.parse(e.data).k; if(!k) return;
+    mergeCandle({t:k.t,o:+k.o,h:+k.h,l:+k.l,c:+k.c});
+  };
+  ws.onclose=()=>{ if(g===gen&&iv===S.iv&&wsKline===ws&&!S.poll) setTimeout(()=>{if(g===gen&&iv===S.iv)openKline(g)},2000) };
+}
+function changeIv(iv){
+  S.iv=iv; save(); V.pan=0; V.autoY=true;
+  if(wsKline){wsKline.onclose=null;wsKline.close();wsKline=null}
+  const g=gen; loadKlines(g).then(ok=>{if(ok&&g===gen)openKline(g)});
+}
+
+/* ---------- 웹소켓: 호가창 (스냅샷 + 변경분 동기화) ---------- */
+function openDepth(g){
+  if(S.poll) return;
+  let got=false, ws;
+  try{ws=new WebSocket(WSS[wsIdx]+'/ws/'+S.symbol.toLowerCase()+'@depth@100ms')}catch(e){startPoll(g);return}
+  wsDepth=ws;
+  const guard=setTimeout(()=>{ if(!got&&wsDepth===ws) ws.close() },8000);
+  ws.onopen=()=>{S.synced=false;S.buf=[];setStatus('wait','호가창 동기화 중');snapshot(g)};
+  ws.onmessage=e=>{
+    if(g!==gen) return;
+    const d=JSON.parse(e.data); if(d.e!=='depthUpdate') return;
+    got=true; wsFails=0; lastDepthMsg=Date.now();
+    if(!S.synced){S.buf.push(d); if(S.buf.length>5000)S.buf.shift(); return}
+    applyDepth(d,g); tick();
+  };
+  ws.onclose=()=>{
+    clearTimeout(guard);
+    if(g!==gen||wsDepth!==ws) return;
+    S.synced=false;
+    if(!got){ wsIdx=(wsIdx+1)%WSS.length; if(++wsFails>=4){startPoll(g);return} }
+    setStatus('wait','재연결 중');
+    setTimeout(()=>{if(g===gen)openDepth(g)},got?2000:500);
+  };
+}
+/* 웹소켓이 막힌 환경에서는 5초마다 호가창 전체를 다시 받아 온다 */
+async function startPoll(g){
+  S.poll=true; S.buf=[];
+  if(wsKline){wsKline.onclose=null;wsKline.close();wsKline=null}
+  while(g===gen&&S.poll){
+    const iv=S.iv;
+    try{
+      const [d,k]=await Promise.all([restGet('/api/v3/depth?symbol='+S.symbol+'&limit=5000'),restGet('/api/v3/klines?symbol='+S.symbol+'&interval='+iv+'&limit=3')]);
+      if(g!==gen) return;
+      S.bids=new Map(d.bids.map(x=>[x[0],+x[1]])); S.asks=new Map(d.asks.map(x=>[x[0],+x[1]])); S.synced=true;
+      if(iv===S.iv) for(const x of k) mergeCandle({t:x[0],o:+x[1],h:+x[2],l:+x[3],c:+x[4]});
+      setStatus('ok','5초 간격 갱신'); tick();
+    }catch(e){ if(g!==gen) return; setStatus('bad','연결이 끊겼습니다. 다시 시도 중') }
+    await sleep(5000);
+  }
+}
+async function snapshot(g){
+  const wait=Math.max(0,lastSnap+1500-Date.now());
+  if(wait) await new Promise(r=>setTimeout(r,wait));
+  if(g!==gen) return;
+  lastSnap=Date.now();
+  try{
+    const j=await restGet('/api/v3/depth?symbol='+S.symbol+'&limit=5000');
+    if(g!==gen) return;
+    S.bids=new Map(j.bids.map(x=>[x[0],+x[1]]));
+    S.asks=new Map(j.asks.map(x=>[x[0],+x[1]]));
+    S.lastU=j.lastUpdateId;
+    const buf=S.buf; S.buf=[]; S.synced=true;
+    for(const d of buf){ if(!S.synced) break; applyDepth(d,g) }
+    if(S.synced) setStatus('ok','실시간');
+  }catch(e){
+    if(g!==gen) return;
+    setStatus('bad','호가창을 불러오지 못했습니다. 다시 시도 중');
+    setTimeout(()=>{if(g===gen&&!S.synced)snapshot(g)},3000);
+  }
+}
+function applyDepth(d,g){
+  if(d.u<=S.lastU) return;
+  if(d.U>S.lastU+1){ S.synced=false; S.buf=[d]; setStatus('wait','호가창 다시 동기화 중'); snapshot(g); return }
+  for(const x of d.b){const q=+x[1]; if(q===0)S.bids.delete(x[0]); else S.bids.set(x[0],q)}
+  for(const x of d.a){const q=+x[1]; if(q===0)S.asks.delete(x[0]); else S.asks.set(x[0],q)}
+  S.lastU=d.u;
+}
+
+/* ---------- 1초마다 호가창을 묶어서 매물대 추적 ---------- */
+function tick(){ if(Date.now()-lastSample>=950) sample() }
+function sample(){
+  dirty=true; lastSample=Date.now();
+  if(!S.synced||!S.candles.length||!S.bucket||!S.remoteDone) return;
+  const now=Date.now(), b=S.bucket;
+  const first=!S.sampled; S.sampled=true;
+  if(first) loadStored(now);
+  let bb=0, ba=Infinity;
+  for(const p of S.bids.keys()){const v=+p; if(v>bb)bb=v}
+  for(const p of S.asks.keys()){const v=+p; if(v<ba)ba=v}
+  if(!bb||ba===Infinity) return;
+  const mid=(bb+ba)/2, lo=mid*(1-S.range), hi=mid*(1+S.range), l1=mid*0.99, h1=mid*1.01;
+  const bidB=new Map(), askB=new Map(); let d1b=0,d1a=0;
+  const add=(m,p,q)=>{const i=Math.floor(p/b+1e-9); let o=m.get(i); if(!o){o={q:0,n:0};m.set(i,o)} o.q+=q;o.n+=p*q};
+  for(const [ps,q] of S.bids){const p=+ps; if(p<lo)continue; add(bidB,p,q); if(p>=l1)d1b+=p*q}
+  for(const [ps,q] of S.asks){const p=+ps; if(p>hi)continue; add(askB,p,q); if(p<=h1)d1a+=p*q}
+  let mx=0; const all=[];
+  for(const o of bidB.values()){all.push(o.n); if(o.n>mx)mx=o.n}
+  for(const o of askB.values()){all.push(o.n); if(o.n>mx)mx=o.n}
+  S.prof={bid:bidB,ask:askB,max:mx}; S.bb=bb; S.ba=ba; S.d1b=d1b; S.d1a=d1a;
+
+  // 탐지 기준: 자동이면 (중앙값의 5배)와 (상위 3% 경계) 중 큰 값
+  let thr;
+  if(S.minSize==='auto'){
+    all.sort((x,y)=>x-y);
+    const med=all[Math.floor(all.length/2)]||0, p97=all[Math.floor(all.length*0.97)]||0;
+    const raw=Math.max(med*5,p97);
+    S.thrAuto=S.thrAuto?S.thrAuto*0.92+raw*0.08:raw; thr=S.thrAuto;
+  }else thr=+S.minSize;
+  S.thr=thr;
+
+  for(const [side,m] of [['bid',bidB],['ask',askB]]){
+    for(const [i,o] of m){
+      const key=side+i, w=S.active.get(key);
+      if(w){
+        if(o.n>=thr*0.6){
+          w.last=now;w.miss=0;w.size=o.n;w.qty=o.q;if(o.n>w.max)w.max=o.n;
+          const tier=o.n>=thr*2.5?2:1, sg=w.segs[w.segs.length-1];
+          if(sg.tier!==tier||Math.abs(o.n-sg.n)/sg.n>0.25) w.segs.push({t:now,n:o.n,tier});
+        }
+      }else{
+        const old=first&&S.resume&&S.resume.get(key), tier=o.n>=thr*2.5?2:1;
+        if(old&&o.n>=thr*0.6){
+          // 지난번에 보던 매물대가 아직 남아 있으면 이어서 추적 (꺼져 있던 구간은 공백으로 표시)
+          const ls=old.segs[old.segs.length-1];
+          if(old.src==='r') old.segs.push({t:now,n:o.n,tier}); // 서버 기록은 끊김 없이 이어 붙인다
+          else{ old.segs.push({t:old.last,n:old.size,tier:ls?ls.tier:1,gap:true},{t:now,n:o.n,tier}); old.gaps=(old.gaps||0)+1 }
+          old.live=true; old.active=true; old.fate=null; old.last=now; old.miss=0; old.size=o.n; old.qty=o.q; if(o.n>old.max)old.max=o.n;
+          S.active.set(key,old);
+        }else if(o.n>=thr){
+          const nw={id:++wallId,key,side,lo:i*b,hi:(i+1)*b,price:(i+0.5)*b,start:now,last:now,size:o.n,qty:o.q,max:o.n,miss:0,active:true,pre:first,segs:[{t:now,n:o.n,tier}]};
+          S.active.set(key,nw); S.walls.push(nw);
+        }
+      }
+    }
+  }
+  for(const [key,w] of S.active){
+    if(w.last===now) continue;
+    if(w.hi<lo||w.lo>hi) continue; // 탐지 범위 밖으로 벗어난 동안은 판단을 미룬다
+    if(++w.miss>3){
+      w.active=false; S.active.delete(key);
+      w.fate=(w.side==='ask'?ba>=w.lo-b:bb<=w.hi+b)?'filled':'pulled';
+      if(w.last-w.start<5000&&!w.pre&&!w.gaps){const i=S.walls.indexOf(w); if(i>=0)S.walls.splice(i,1)}
+    }
+  }
+  S.resume=null;
+  if(S.walls.length>900){ let drop=S.walls.length-900; S.walls=S.walls.filter(w=>w.active||drop--<=0) }
+  renderPanel(now,mid);
+}
+function shown(w,now){ if(S.minSize!=='auto'&&w.max<+S.minSize*0.6) return false; return w.pre||w.gaps||(w.active?now:w.last)-w.start>=S.minDur}
+function durTxt(w,end){return fDur(end-w.start)+(w.pre?' 이상':'')}
+
+/* ---------- 매물대 기록을 브라우저에 저장해 다음에 열 때 이어 보기 ---------- */
+function storeKey(){return 'obw:'+S.symbol+':'+S.bucket}
+function saveWalls(){
+  if(!S.sampled||!S.bucket) return;
+  try{
+    const cut=Date.now()-48*36e5;
+    const ws=S.walls.filter(w=>w.last>=cut&&(w.src!=='r'||w.live)&&(w.active||w.last-w.start>=30000)).slice(-500).map(w=>Object.assign({},w,{segs:w.segs.slice(-40)}));
+    localStorage.setItem(storeKey(),JSON.stringify({t:Date.now(),walls:ws}));
+  }catch(e){}
+}
+function loadStored(now){
+  S.resume=new Map();
+  const add=(w,remote)=>{
+    if(!w||!w.segs||!w.segs.length||now-w.last>72*36e5) return;
+    w.id=++wallId; w.miss=0; delete w.live; if(remote) w.src='r'; else delete w.src;
+    if(w.active){ w.fate='unseen'; if(now-w.last<(remote?40*6e4:48*36e5)&&!S.resume.has(w.key)) S.resume.set(w.key,w) }
+    w.active=false; S.walls.push(w);
+  };
+  const rem=S.remote?S.remote.walls:[];
+  for(const w of rem) add(w,true);
+  try{
+    const o=JSON.parse(localStorage.getItem(storeKey())||'null');
+    if(o&&Array.isArray(o.walls)) for(const w of o.walls){
+      // 서버 기록과 겹치는 구간은 서버 기록을 쓴다
+      if(w&&rem.some(r=>r.key===w.key&&r.start<=w.last+3e5&&w.start<=r.last+3e5)) continue;
+      add(w,false);
+    }
+  }catch(e){}
+  S.walls.sort((x,y)=>x.start-y.start);
+}
+
+function renderPanel(now,mid){
+  const last=S.candles[S.candles.length-1];
+  const tot=S.d1b+S.d1a||1, pb=S.d1b/tot*100;
+  $('balB').style.width=pb+'%'; $('balA').style.width=(100-pb)+'%';
+  $('balBt').textContent='매수 '+fUsd(S.d1b)+' ('+pb.toFixed(0)+'%)';
+  $('balAt').textContent='매도 '+fUsd(S.d1a)+' ('+(100-pb).toFixed(0)+'%)';
+  $('spread').textContent=fP(S.ba-S.bb);
+  $('thr').textContent=fUsd(S.thr)+' 이상'+(S.minSize==='auto'?' (자동)':'');
+  $('lvls').textContent=(S.bids.size+S.asks.size).toLocaleString('en-US');
+  $('srv').textContent=S.remote?fDur(Math.max(0,S.remote.started?now-S.remote.started:0))+'치 불러옴':'없음';
+  const act=[...S.active.values()].filter(w=>shown(w,now)).sort((a,b)=>b.price-a.price);
+  const mxs=act.reduce((m,w)=>Math.max(m,w.size),0)||1;
+  const row=w=>'<tr class="'+w.side+(w.size>=S.thr*2.5?' xl':'')+'"><td>'+fP(w.price)+'</td><td><i class="bar" style="width:'+(w.size/mxs*100).toFixed(0)+'%;background:'+(w.side==='ask'?C.down:C.up)+'"></i><span>'+fUsd(w.size)+'</span></td><td>'+((w.price-mid)/mid*100>=0?'+':'')+((w.price-mid)/mid*100).toFixed(2)+'%</td><td>'+durTxt(w,now)+'</td></tr>';
+  const asks=act.filter(w=>w.side==='ask'), bids=act.filter(w=>w.side==='bid');
+  let h=asks.map(row).join('');
+  if(!asks.length) h+='<tr><td colspan="4" class="empty">조건에 맞는 매도 매물대 없음</td></tr>';
+  h+='<tr class="mid"><td colspan="4" style="color:'+(last.c>=last.o?C.up:C.down)+'">'+fP(mid)+'</td></tr>';
+  h+=bids.map(row).join('');
+  if(!bids.length) h+='<tr><td colspan="4" class="empty">조건에 맞는 매수 매물대 없음</td></tr>';
+  $('wallRows').innerHTML=h;
+  const near=(w)=>w?fP(w.price)+' · '+fUsd(w.size)+' · '+((w.price-mid)/mid*100>=0?'+':'')+((w.price-mid)/mid*100).toFixed(2)+'%':'없음';
+  $('nearA').textContent=near(asks.filter(w=>w.price>mid).pop()); $('nearB').textContent=near(bids.filter(w=>w.price<mid)[0]);
+  const gone=S.walls.filter(w=>!w.active&&(w.fate==='filled'||w.fate==='pulled')&&w.last-w.start>=Math.max(S.minDur,10000)).sort((a,b)=>b.last-a.last).slice(0,6);
+  $('goneRows').innerHTML=gone.length?gone.map(w=>'<tr class="'+w.side+'"><td>'+fP(w.price)+'</td><td>'+fUsd(w.max)+'</td><td>'+(w.fate==='filled'?'체결 추정':'취소 추정')+'</td><td>'+fDur(now-w.last)+' 전</td></tr>').join(''):'<tr><td colspan="4" class="empty">아직 없음</td></tr>';
+}
+
+/* ---------- 차트 그리기 ---------- */
+const cv=$('cv'), ctx=cv.getContext('2d');
+function resize(){const d=window.devicePixelRatio||1; cv.width=Math.max(1,cv.clientWidth*d); cv.height=Math.max(1,cv.clientHeight*d); dirty=true}
+new ResizeObserver(resize).observe($('chartWrap'));
+function niceStep(range,n){const raw=range/n, e=Math.pow(10,Math.floor(Math.log10(raw))), f=raw/e; return (f<1.5?1:f<3.5?2:f<7.5?5:10)*e}
+function rgba(hex,a){const n=parseInt(hex.slice(1),16);return 'rgba('+(n>>16)+','+((n>>8)&255)+','+(n&255)+','+a+')'}
+
+function draw(){
+  const d=window.devicePixelRatio||1, W=cv.clientWidth, H=cv.clientHeight;
+  ctx.setTransform(d,0,0,d,0,0); ctx.clearRect(0,0,W,H);
+  const c=S.candles; V.hits=[];
+  if(!c.length||W<120||H<80) return;
+  const pw=W-AXW, ph=H-AXH, iv=IVMS[S.iv], last=c[c.length-1], tEnd=last.t+iv, now=Date.now();
+  const xR=pw-RGAP+V.pan, X=t=>xR-(tEnd-t)/iv*V.bw;
+  V.pw=pw;V.ph=ph;V.xR=xR;V.tEnd=tEnd;V.iv=iv;
+  const walls=S.walls.filter(w=>shown(w,now));
+
+  if(V.autoY){
+    let lo=Infinity,hi=-Infinity;
+    for(const k of c){const x=X(k.t); if(x>pw||x+V.bw<0)continue; if(k.l<lo)lo=k.l; if(k.h>hi)hi=k.h}
+    if(lo===Infinity){lo=last.l;hi=last.h}
+    for(const w of walls){ if(!w.active||Math.abs(w.price-last.c)/last.c>0.015)continue; if(w.lo<lo)lo=w.lo; if(w.hi>hi)hi=w.hi }
+    const pad=(hi-lo)*0.08||last.c*0.001; V.lo=lo-pad; V.hi=hi+pad;
+  }
+  const Y=p=>ph-(p-V.lo)/(V.hi-V.lo)*ph;
+  ctx.font='11px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif'; ctx.textBaseline='middle';
+
+  // 격자 + 가격 축
+  const ps=niceStep(V.hi-V.lo,Math.max(3,Math.floor(ph/56)));
+  ctx.strokeStyle=rgba(C.line,0.55); ctx.lineWidth=1; ctx.fillStyle=C.muted; ctx.textAlign='left';
+  for(let p=Math.ceil(V.lo/ps)*ps;p<V.hi;p+=ps){const y=Math.round(Y(p))+.5; ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(pw,y);ctx.stroke(); ctx.fillText(fP(p),pw+8,y)}
+  // 시간 축
+  const minStep=Math.ceil(84/V.bw), steps=[1,2,5,10,15,30,60,120,240,480,1440]; let st=steps.find(s=>s>=minStep)||2880;
+  ctx.textAlign='center';
+  const tz=new Date().getTimezoneOffset()*6e4;
+  for(const k of c){
+    if(((k.t-tz)/iv)%st!==0) continue; const x=X(k.t+iv/2); if(x<20||x>pw-20) continue;
+    const dt=new Date(k.t), hm=String(dt.getHours()).padStart(2,'0')+':'+String(dt.getMinutes()).padStart(2,'0');
+    const lab=(dt.getHours()===0&&dt.getMinutes()===0)||iv*st>=864e5?(dt.getMonth()+1)+'/'+dt.getDate():hm;
+    ctx.strokeStyle=rgba(C.line,0.35); ctx.beginPath();ctx.moveTo(Math.round(x)+.5,0);ctx.lineTo(Math.round(x)+.5,ph);ctx.stroke();
+    ctx.fillText(lab,x,ph+AXH/2);
+  }
+
+  ctx.save(); ctx.beginPath(); ctx.rect(0,0,pw,ph); ctx.clip();
+
+  // 현재 호가 잔량 프로필 (오른쪽 가장자리)
+  if(S.showProf&&S.prof&&S.prof.max){
+    const b=S.bucket, bh=Math.max(1,Math.abs(Y(0)-Y(b))-0.5), mw=RGAP-14;
+    for(const [m,col] of [[S.prof.bid,C.up],[S.prof.ask,C.down]]){
+      ctx.fillStyle=rgba(col,0.3);
+      for(const [i,o] of m){const y=Y((i+1)*b); if(y>ph||y+bh<0)continue; const w=Math.max(1,o.n/S.prof.max*mw); ctx.fillRect(pw-w,y,w,bh)}
+    }
+  }
+
+  // 매물대 막대
+  const bh=7;
+  for(const w of walls){
+    const y=Y(w.price); if(y<-bh||y>ph+bh) continue;
+    const end=w.active?now:w.last; let xe=X(end), xs=X(w.start);
+    if(xe<0||xs>pw) continue;
+    if(xe-xs<4) xs=xe-4;
+    const fade=w.active?1:w.fate==='pulled'?0.32:0.5;
+    if(w.pre){ const sg=w.segs[0], col=sg.tier===2?C.xl:C.wall, g=ctx.createLinearGradient(xs-44,0,xs,0);
+      g.addColorStop(0,rgba(col,0)); g.addColorStop(1,rgba(col,0.5*fade)); ctx.fillStyle=g; ctx.fillRect(xs-44,y-bh/2,44,bh) }
+    for(let i=0;i<w.segs.length;i++){
+      const sg=w.segs[i], x0=i===0?xs:Math.max(xs,X(sg.t)), x1=i+1<w.segs.length?X(w.segs[i+1].t):xe;
+      if(x1<=x0) continue;
+      ctx.fillStyle=rgba(sg.tier===2?C.xl:C.wall,sg.gap?0.16:(0.45+0.55*Math.min(1,sg.n/w.max))*fade);
+      ctx.fillRect(x0,y-bh/2,x1-x0+0.5,bh);
+    }
+    V.hits.push({x0:xs-2,x1:xe+2,y0:y-bh/2-3,y1:y+bh/2+3,w});
+  }
+
+  // 캔들
+  const cw=Math.max(1,Math.floor(V.bw*0.7));
+  for(const k of c){
+    const x=X(k.t+iv/2); if(x<-V.bw||x>pw+V.bw) continue;
+    const up=k.c>=k.o; ctx.fillStyle=ctx.strokeStyle=up?C.up:C.down;
+    const xo=Math.round(x)+.5; ctx.beginPath();ctx.moveTo(xo,Y(k.h));ctx.lineTo(xo,Y(k.l));ctx.stroke();
+    const y0=Y(Math.max(k.o,k.c)), hh=Math.max(1,Y(Math.min(k.o,k.c))-y0);
+    ctx.fillRect(Math.round(x-cw/2),y0,cw,hh);
+  }
+  // MA20
+  if(S.showMa&&c.length>20){
+    ctx.strokeStyle='#e9b949'; ctx.lineWidth=1.3; ctx.beginPath(); let sum=0, on=false;
+    for(let i=0;i<c.length;i++){sum+=c[i].c; if(i>=20)sum-=c[i-20].c; if(i<19)continue; const x=X(c[i].t+iv/2); if(x<-50||x>pw+50){on=false;continue} const y=Y(sum/20); if(on)ctx.lineTo(x,y); else{ctx.moveTo(x,y);on=true}}
+    ctx.stroke(); ctx.lineWidth=1;
+  }
+  // 살아 있는 매물대의 규모 라벨
+  ctx.textAlign='left'; ctx.font='10.5px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif';
+  const used=[];
+  for(const w of walls.filter(w=>w.active).sort((a,b)=>b.size-a.size)){
+    const y=Y(w.price); if(y<8||y>ph-8||used.some(u=>Math.abs(u-y)<12)) continue;
+    const x=X(now)+6; if(x>pw-RGAP+20||x<0) continue;
+    used.push(y); ctx.fillStyle=w.size>=S.thr*2.5?C.xl:'#b9a2fa'; ctx.fillText(fUsd(w.size),x,y);
+  }
+  // 현재가 선
+  const yl=Y(last.c), lc=last.c>=last.o?C.up:C.down;
+  ctx.setLineDash([2,3]); ctx.strokeStyle=rgba(lc,0.8); ctx.beginPath();ctx.moveTo(0,Math.round(yl)+.5);ctx.lineTo(pw,Math.round(yl)+.5);ctx.stroke(); ctx.setLineDash([]);
+  ctx.restore();
+
+  // 축 테두리
+  ctx.strokeStyle=C.line; ctx.beginPath();ctx.moveTo(pw+.5,0);ctx.lineTo(pw+.5,H);ctx.moveTo(0,ph+.5);ctx.lineTo(W,ph+.5);ctx.stroke();
+
+  // 현재가 + 봉 마감 카운트다운
+  ctx.font='11px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif';
+  const rem=Math.max(0,Math.floor((tEnd-now)/1000)), hh=Math.floor(rem/3600), mm=Math.floor(rem%3600/60), ss=rem%60;
+  const cd=(hh?hh+':':'')+String(mm).padStart(2,'0')+':'+String(ss).padStart(2,'0');
+  const ty=Math.min(Math.max(yl,10),ph-28);
+  ctx.fillStyle=lc; ctx.fillRect(pw+1,ty-10,AXW-1,34);
+  ctx.fillStyle='#fff'; ctx.textAlign='left'; ctx.fillText(fP(last.c),pw+8,ty); ctx.fillText(cd,pw+8,ty+15);
+
+  // 십자선
+  if(V.mx>=0&&V.mx<pw&&V.my>=0&&V.my<ph){
+    ctx.setLineDash([4,4]); ctx.strokeStyle=rgba(C.muted,0.6);
+    ctx.beginPath();ctx.moveTo(Math.round(V.mx)+.5,0);ctx.lineTo(Math.round(V.mx)+.5,ph);ctx.moveTo(0,Math.round(V.my)+.5);ctx.lineTo(pw,Math.round(V.my)+.5);ctx.stroke(); ctx.setLineDash([]);
+    const p=V.lo+(ph-V.my)/ph*(V.hi-V.lo);
+    ctx.fillStyle='#2b3246'; ctx.fillRect(pw+1,V.my-9,AXW-1,18); ctx.fillStyle=C.text; ctx.fillText(fP(p),pw+8,V.my);
+    const t=tEnd-(xR-V.mx)/V.bw*iv, dt=new Date(Math.floor(t/iv)*iv);
+    const lab=(dt.getMonth()+1)+'/'+dt.getDate()+' '+String(dt.getHours()).padStart(2,'0')+':'+String(dt.getMinutes()).padStart(2,'0');
+    const tw=ctx.measureText(lab).width+12, tx=Math.min(Math.max(V.mx-tw/2,0),pw-tw);
+    ctx.fillStyle='#2b3246'; ctx.fillRect(tx,ph+1,tw,AXH-1); ctx.fillStyle=C.text; ctx.fillText(lab,tx+6,ph+AXH/2);
+  }
+
+  // 상단 시세
+  $('px').textContent=fP(last.c); $('px').style.color=lc;
+  document.title=fP(last.c)+' '+S.symbol+' 호가 매물대 차트';
+}
+function frame(){ if(dirty){dirty=false; try{draw()}catch(e){console.error(e)}} requestAnimationFrame(frame) }
+
+/* ---------- 차트 조작 ---------- */
+const tip=$('tip'); let drag=null;
+function pos(e){const r=cv.getBoundingClientRect();return [e.clientX-r.left,e.clientY-r.top]}
+cv.addEventListener('pointerdown',e=>{const [x,y]=pos(e); drag={x,y,axis:x>V.pw,pan:V.pan,lo:V.lo,hi:V.hi}; cv.setPointerCapture(e.pointerId); tip.style.display='none'});
+cv.addEventListener('pointermove',e=>{
+  const [x,y]=pos(e); V.mx=x;V.my=y; dirty=true;
+  if(drag){
+    if(drag.axis){ V.autoY=false; const f=Math.exp((y-drag.y)*0.006), mid=(drag.lo+drag.hi)/2, half=(drag.hi-drag.lo)/2*f; V.lo=mid-half;V.hi=mid+half }
+    else{ V.pan=drag.pan+(x-drag.x); if(!V.autoY){const dp=(y-drag.y)/V.ph*(drag.hi-drag.lo); V.lo=drag.lo+dp;V.hi=drag.hi+dp} }
+    return;
+  }
+  const h=V.hits.filter(h=>x>=h.x0&&x<=h.x1&&y>=h.y0&&y<=h.y1).sort((a,b)=>b.w.active-a.w.active)[0];
+  if(!h){tip.style.display='none';return}
+  const w=h.w, now=Date.now(), end=w.active?now:w.last;
+  tip.innerHTML='<h4 style="color:'+(w.side==='ask'?C.down:C.up)+'">'+(w.side==='ask'?'매도 매물대':'매수 매물대')+'</h4>'+
+    '<div><span>상태</span><b>'+(w.active?'유지 중':w.fate==='filled'?'가격 도달 후 사라짐 (체결 추정)':w.fate==='pulled'?'닿기 전에 사라짐 (취소 추정)':'꺼져 있는 동안 사라짐')+'</b></div>'+
+    '<div><span>가격대</span><b>'+fP(w.lo)+' ~ '+fP(w.hi)+'</b></div>'+
+    '<div><span>'+(w.active?'현재 규모':'마지막 규모')+'</span><b>'+fUsd(w.size)+'</b></div>'+
+    '<div><span>수량</span><b>'+fQty(w.qty)+' '+coin()+'</b></div>'+
+    '<div><span>최대 규모</span><b>'+fUsd(w.max)+'</b></div>'+
+    '<div><span>유지 시간</span><b>'+durTxt(w,end)+'</b></div>'+(w.pre?'<div><span>열기 전부터 있던 주문</span></div>':'')+(w.gaps?'<div><span>중간에 관측 공백 있음</span></div>':'')+(w.src==='r'?'<div><span>5분 간격 서버 기록 포함</span></div>':'');
+  tip.style.display='block';
+  const tw=tip.offsetWidth, th=tip.offsetHeight;
+  tip.style.left=Math.max(4,Math.min(x+14,V.pw-tw-4))+'px'; tip.style.top=Math.max(4,y-th-10<4?y+16:y-th-10)+'px';
+});
+cv.addEventListener('pointerup',()=>{drag=null});
+cv.addEventListener('pointercancel',()=>{drag=null});
+cv.addEventListener('pointerleave',()=>{V.mx=V.my=-1;tip.style.display='none';dirty=true});
+cv.addEventListener('dblclick',()=>{V.pan=0;V.autoY=true;V.bw=7;dirty=true});
+cv.addEventListener('wheel',e=>{
+  e.preventDefault(); const [x,y]=pos(e);
+  if(x>V.pw||e.shiftKey){ V.autoY=false; const f=Math.exp(e.deltaY*0.0015), p=V.lo+(V.ph-Math.min(y,V.ph))/V.ph*(V.hi-V.lo); V.lo=p-(p-V.lo)*f; V.hi=p+(V.hi-p)*f }
+  else{ const span=(V.xR-x)/V.bw; V.bw=Math.min(40,Math.max(1.5,V.bw*Math.exp(-e.deltaY*0.0015))); V.pan=x+span*V.bw-(V.pw-RGAP) }
+  dirty=true;
+},{passive:false});
+
+/* ---------- 설정 UI ---------- */
+function syncUi(){
+  $('sym').value=S.symbol; $('minSize').value=S.minSize; $('minDur').value=S.minDur; $('range').value=S.range;
+  $('showProf').checked=S.showProf; $('showMa').checked=S.showMa;
+  for(const b of $('ivSeg').children) b.setAttribute('aria-pressed',b.dataset.iv===S.iv);
+}
+function resetWalls(){S.walls=[];S.active.clear();S.thrAuto=0;S.prof=null;S.sampled=false;S.resume=null}
+$('sym').addEventListener('change',e=>{const v=e.target.value.toUpperCase().replace(/[^A-Z0-9]/g,''); if(!v||v===S.symbol){e.target.value=S.symbol;return} saveWalls(); S.symbol=v; S.bucketOff=0; e.target.value=v; save(); start()});
+$('sym').addEventListener('keydown',e=>{if(e.key==='Enter')e.target.blur()});
+$('ivSeg').addEventListener('click',e=>{const iv=e.target.dataset&&e.target.dataset.iv; if(!iv||iv===S.iv)return; changeIv(iv); syncUi()});
+$('bucket').addEventListener('change',e=>{S.bucketOff=+e.target.value; save(); if(S.candles.length){saveWalls(); setBucket(); resetWalls(); fetchRemote(gen)} });
+$('minSize').addEventListener('change',e=>{S.minSize=e.target.value; S.thrAuto=0; save()});
+$('minDur').addEventListener('change',e=>{S.minDur=+e.target.value; save(); dirty=true});
+$('range').addEventListener('change',e=>{S.range=+e.target.value; S.thrAuto=0; save()});
+$('showProf').addEventListener('change',e=>{S.showProf=e.target.checked; save(); dirty=true});
+$('showMa').addEventListener('change',e=>{S.showMa=e.target.checked; save(); dirty=true});
+
+syncUi(); resize(); start(); requestAnimationFrame(frame);
+setInterval(()=>{
+  tick();
+  if(!S.poll&&wsDepth&&wsDepth.readyState===1&&lastDepthMsg&&Date.now()-lastDepthMsg>10000){lastDepthMsg=Date.now(); wsDepth.close()}
+},1000);
+setInterval(saveWalls,15000);
+addEventListener('pagehide',saveWalls);
+document.addEventListener('visibilitychange',()=>{if(document.hidden)saveWalls()});
+</script>
+</body>
+</html>
